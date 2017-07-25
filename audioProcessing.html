@@ -1,264 +1,311 @@
 <!DOCTYPE html>
-<!-- saved from url=(0048)https://www.kylepaulsen.com/stuff/audioSort.html -->
 <html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-  
-  <meta name="viewport" content="width=device-width">
-  <title>Sort Audio By Loudness</title>
+	<meta name="viewport" content="width=device-width">
+	<title>Sort Audio By Loudness</title>
 </head>
 <body>
-    This will split audio into 'chunks' and sort them by loudness.<br><br>
-    First set a chunk size:<br>
-    Chunk size (in seconds): <input id="chunk" value="0.05"><br><br>
-    Crossfade length (Needs to be less than Chunk size [less than 1/2 of chunk size for overlap]): <input id="cross" value="0.008333333333333333333333333333"><br><br>
-    Mode:
-    <select id="algorithmMode">
-        <option value="xfadeOverlap">Crossfade (Favor Volume Order)</option>
-        <option value="xfadeNoOverlap">Crossfade (Favor Original Sample Length)</option>
-        <option value="noXfade">No Crossfade</option>
-    </select>
-    Now choose a file:<br>
-    <input type="file" id="file"> OR <button id="rec" style="width: 200px;">Record from your microphone</button><br><br>
-    <button id="play">Play Again</button><br><br>
-    <button id="save">Save</button>
+	1. Choose a file:<br>
+	<input type="file" id="file"> or <button id="rec" style="width: 200px;">Record from your microphone</button><br>
+	2. Choose an effect:
+	<select id="selectEffect">
+		<option value="----" selected="selected">----</option>
+		<option value="chunkSort">Chunk Sort</option>
+		<option value="chopper">Chopper</option>
+	</select><br>
+	3. Configure the effect:<br>
+	<div id="chunkSortContainer" class="effectContainer" style='display: none'>
+		This will split audio into 'chunks' and sort them by loudness.<br>
+		First set a chunk size:<br>
+		Chunk size (in seconds): <input id="chunk" value="0.05"><br>
+		Crossfade length (Needs to be less than Chunk size [less than 1/2 of chunk size for overlap]): <input id="cross" value="0.008333333333333333333333333333"><br>
+		Sort loudest to quietest?: <input id="sortOrder" type="checkbox" checked><br>
+		Mode:
+		<select id="algorithmMode">
+			<option value="xfadeOverlap" selected="selected">Crossfade (favor volume order)</option>
+			<option value="xfadeNoOverlap">Crossfade (favor original sample length)</option>
+			<option value="noXfade">No crossfade (sounds clicky)</option>
+		</select>
+	</div>
+	<div id="chopperContainer" class="effectContainer" style='display: none'>
+		This will mute the audio during each second chunk to create a choppy effect.
+		First chunk length: <input id="firstChunk" value="0.025"><br>
+		Second chunk length: <input id="secondChunk" value="0.01666666666666666666666666667"><br>
+	</div>
+	4. Process the audio:<button id="processButton">Process</button><br>
+	5. Listen again:<button id="playButton">Play Again</button><br>
+	6. Save the audio to your computer:<button id="saveButton">Save</button>
 
-    <script>
-        window.module = {};
-    </script>
-    <!-- https://github.com/mattdiamond/Recorderjs -->
-    <script src="recorder.js"></script>
-    <!-- https://github.com/Jam3/audiobuffer-to-wav -->
-    <script src="index.js"></script>
-    <script>
-        // hack to get this commonjs module.
-        const bufferToWav = module.exports;
+	<script>
+		window.module = {};
+	</script>
+	<!-- https://github.com/mattdiamond/Recorderjs -->
+	<script src="recorder.js"></script>
+	<!-- https://github.com/Jam3/audiobuffer-to-wav -->
+	<script src="index.js"></script>
+	<script>
+		// hack to get this commonjs module.
+		const bufferToWav = module.exports;
 
-        const $ = document.querySelector.bind(document);
-        const fileSelect = $('#file');
+		const $ = document.querySelector.bind(document);
+		const fileSelect = $('#file');
 
-        const ctx = new AudioContext();
-        let sampleRate = 44100;
+		const ctx = new AudioContext();
+		let sampleRate = 44100;
+		let pcmFunction;
+		let buffer;
 
-        //the root square of the average of the square of each value
-        //inclusive start, exclusive end
-        //assumes start < end
-        function rootMeanSquare(data, start, end) {
-            const length = end - start;
-            let rms = 0;
-            for (let t = start; t < end; t++) {
-                const value = data[t];
-                rms += value * value;
-            }
-            rms /= length;
-            rms = Math.sqrt(rms);
-            return rms;
-        }
+		//the root square of the average of the square of each value
+		//inclusive start, exclusive end
+		//assumes start < end
+		function rootMeanSquare(data, start, end) {
+			const length = end - start;
+			let rms = 0;
+			for (let t = start; t < end; t++) {
+				const value = data[t];
+				rms += value * value;
+			}
+			rms /= length;
+			rms = Math.sqrt(rms);
+			return rms;
+		}
 
-        function changePCM(data) {
-            // just reverse it
-            //data.reverse();
+		function chopperChangePCM(data) {
+			const newBuffer = new Float32Array(data.length);
+			let firstChunkLength = parseFloat($('#firstChunk').value);
+			let secondChunkLength = parseFloat($('#secondChunk').value);
+			let chopCycleLength = firstChunkLength + secondChunkLength;
+			for (let i=0; i<data.length; i++) {
+				let timeInSeconds = i/sampleRate;
+				let timeIntoCycle = timeInSeconds - chopCycleLength * Math.floor(timeInSeconds/chopCycleLength);
+				if (timeIntoCycle < firstChunkLength) {
+					newBuffer[i] = data[i];
+				} else {
+					newBuffer[i] = 0;
+				}
+			}
+			data.set(newBuffer);
+		}
 
-            // MLG BLAST IT
-            // const len = data.length;
-            // for (let x = 0; x < len; x++) {
-            //     data[x] = data[x] * 10;
-            // }
+		function audioSortChangePCM(data) {
+			// just reverse it
+			//data.reverse();
 
-            // sort sections by loudness
-            let chunkSize = parseFloat($('#chunk').value);
-            if (isNaN(chunkSize) || chunkSize <= 0) {
-                alert('invalid chunk size, setting to 0.05');
-                chunkSize = 0.05;
-            }
-            let algorithmMode = document.querySelector('#algorithmMode').value;
-            let crossfadeLength = parseFloat($('#cross').value);
-            if (isNaN(crossfadeLength) || crossfadeLength <= 0) {
-                alert('invalid crossfade size, setting to 0.02');
-                crossfadeLength = 0.02;
-            }
-            let crossfadeSamples = Math.floor(crossfadeLength * sampleRate);
-            let crossfadeInArray = [];
-            for (let i=0; i<crossfadeSamples; i++) {
-                crossfadeInArray.push(i/crossfadeSamples);
-            }
-            let crossfadeOutArray = crossfadeInArray.slice().reverse()
-            const frames = [];
-            const len = data.length;
-            let v = 0;
-            let chunkIndex = 0;
-            while (v < len) {
-                let start = Math.floor(chunkIndex * chunkSize * sampleRate);
-                let end = Math.floor(start + chunkSize * sampleRate);
-                let frameSize = end-start;
-                if (end >= len) {
-                    //abandon any leftover data that doesn't fit
-                    break;
-                }
-                let rms = rootMeanSquare(data, start, end);
-                frames.push({offset: v, loudness: rms, frameSize: frameSize});
-                v = end;
-                chunkIndex++;
-            }
-            if (algorithmMode === 'xfadeNoOverlap') {
-                //remove the last frame so we know we have some data after the second to last frame for fading
-                frames.pop();
-            }
-            frames.sort(function(a, b) {
-                return a.loudness - b.loudness;
-            });
-            const newBuffer = new Float32Array(len);
-            const numFrames = frames.length;
-            if (algorithmMode === 'xfadeNoOverlap') {
-                let i = 0;
-                // special case for first frame
-                const frame = frames[0];
-                const offset = frame.offset;
-                for (let w = 0; w < frame.frameSize; w++) {
-                    newBuffer[i] = data[offset + w];
-                    i++;
-                }
-                for (let x = 1; x < numFrames; x++) {
-                    const frame = frames[x];
-                    const prevframe = frames[x-1];
-                    //crossfade
-                    for (let y = 0; y < crossfadeSamples; y++) {
-                        newBuffer[i] = data[frame.offset + y]*crossfadeInArray[y] + data[prevframe.offset + prevframe.frameSize + y]*crossfadeOutArray[y];
-                        i++;
-                    }
-                    for (let z = crossfadeSamples; z < frame.frameSize; z++) {
-                        newBuffer[i] = data[frame.offset + z];
-                        i++;
-                    }
-                }
-            } else if (algorithmMode === 'xfadeOverlap') {
-                let i = 0;
-                // special case for first frame
-                const frame = frames[0];
-                const offset = frame.offset;
-                for (let v = 0; v < frame.frameSize-crossfadeSamples; v++) {
-                    newBuffer[i] = data[offset + v];
-                    i++;
-                }
-                for (let w = 1; w < numFrames-1; w++) {
-                    const prevFrame = frames[w-1];
-                    const frame = frames[w];
-                    const nextFrame = frames[w-1];
-                    // crossfade into frame and out of prev frame
-                    for (let x = 0; x < crossfadeSamples; x++) {
-                        newBuffer[i] = data[frame.offset + x]*crossfadeInArray[x] + data[prevFrame.offset + prevFrame.frameSize - crossfadeSamples + x]*crossfadeOutArray[x];
-                        i++;
-                    }
-                    // frame
-                    for (let y = crossfadeSamples; y < frame.frameSize-crossfadeSamples; y++) {
-                        newBuffer[i] = data[frame.offset + y];
-                        i++;
-                    }
-                }
-            } else {
-                let i = 0;
-                for (let x = 0; x < numFrames; x++) {
-                    const frame = frames[x];
-                    const offset = frame.offset;
-                    for (let z = 0; z < frame.frameSize; z++) {
-                        newBuffer[i] = data[offset + z];
-                        i++;
-                    }
-                }
-            }
-            data.set(newBuffer);
-        }
+			// MLG BLAST IT
+			// const len = data.length;
+			// for (let x = 0; x < len; x++) {
+			//     data[x] = data[x] * 10;
+			// }
 
-        function processBuffer(buffer) {
-            const leftChannelData = buffer.getChannelData(0);
-            let rightChannelData;
-            try {
-                rightChannelData = buffer.getChannelData(1);
-            } catch(e) {}
+			// sort sections by loudness
+			let chunkSize = parseFloat($('#chunk').value);
+			if (isNaN(chunkSize) || chunkSize <= 0) {
+				alert('invalid chunk size, setting to 0.05');
+				chunkSize = 0.05;
+			}
+			let algorithmMode = document.querySelector('#algorithmMode').value;
+			let crossfadeLength = parseFloat($('#cross').value);
+			if (isNaN(crossfadeLength) || crossfadeLength <= 0) {
+				alert('invalid crossfade size, setting to 0.02');
+				crossfadeLength = 0.02;
+			}
+			let crossfadeSamples = Math.floor(crossfadeLength * sampleRate);
+			let crossfadeInArray = [];
+			for (let i=0; i<crossfadeSamples; i++) {
+				crossfadeInArray.push(i/crossfadeSamples);
+			}
+			let crossfadeOutArray = crossfadeInArray.slice().reverse()
+			const frames = [];
+			const len = data.length;
+			let v = 0;
+			let chunkIndex = 0;
+			while (v < len) {
+				let start = Math.floor(chunkIndex * chunkSize * sampleRate);
+				let end = Math.floor(start + chunkSize * sampleRate);
+				let frameSize = end-start;
+				if (end >= len) {
+					//abandon any leftover data that doesn't fit
+					break;
+				}
+				let rms = rootMeanSquare(data, start, end);
+				frames.push({offset: v, loudness: rms, frameSize: frameSize});
+				v = end;
+				chunkIndex++;
+			}
+			if (algorithmMode === 'xfadeNoOverlap') {
+				//remove the last frame so we know we have some data after the second to last frame for fading
+				frames.pop();
+			}
+			frames.sort(function(a, b) {
+				return $('#sortOrder').checked ? b.loudness - a.loudness : a.loudness - b.loudness;
+			});
+			const newBuffer = new Float32Array(len);
+			const numFrames = frames.length;
+			if (algorithmMode === 'xfadeNoOverlap') {
+				let i = 0;
+				// special case for first frame
+				const frame = frames[0];
+				const offset = frame.offset;
+				for (let w = 0; w < frame.frameSize; w++) {
+					newBuffer[i] = data[offset + w];
+					i++;
+				}
+				for (let x = 1; x < numFrames; x++) {
+					const frame = frames[x];
+					const prevframe = frames[x-1];
+					//crossfade
+					for (let y = 0; y < crossfadeSamples; y++) {
+						newBuffer[i] = data[frame.offset + y]*crossfadeInArray[y] + data[prevframe.offset + prevframe.frameSize + y]*crossfadeOutArray[y];
+						i++;
+					}
+					for (let z = crossfadeSamples; z < frame.frameSize; z++) {
+						newBuffer[i] = data[frame.offset + z];
+						i++;
+					}
+				}
+			} else if (algorithmMode === 'xfadeOverlap') {
+				let i = 0;
+				// special case for first frame
+				const frame = frames[0];
+				const offset = frame.offset;
+				for (let v = 0; v < frame.frameSize-crossfadeSamples; v++) {
+					newBuffer[i] = data[offset + v];
+					i++;
+				}
+				for (let w = 1; w < numFrames-1; w++) {
+					const prevFrame = frames[w-1];
+					const frame = frames[w];
+					const nextFrame = frames[w-1];
+					// crossfade into frame and out of prev frame
+					for (let x = 0; x < crossfadeSamples; x++) {
+						newBuffer[i] = data[frame.offset + x]*crossfadeInArray[x] + data[prevFrame.offset + prevFrame.frameSize - crossfadeSamples + x]*crossfadeOutArray[x];
+						i++;
+					}
+					// frame
+					for (let y = crossfadeSamples; y < frame.frameSize-crossfadeSamples; y++) {
+						newBuffer[i] = data[frame.offset + y];
+						i++;
+					}
+				}
+			} else {
+				let i = 0;
+				for (let x = 0; x < numFrames; x++) {
+					const frame = frames[x];
+					const offset = frame.offset;
+					for (let z = 0; z < frame.frameSize; z++) {
+						newBuffer[i] = data[offset + z];
+						i++;
+					}
+				}
+			}
+			data.set(newBuffer);
+		}
 
-            changePCM(leftChannelData);
-            if (rightChannelData) {
-                changePCM(rightChannelData);
-            }
+		function playBuffer() {
+			if (buffer) {
+			const sourceNode = ctx.createBufferSource();
+			sourceNode.buffer = buffer;
+			sourceNode.connect(ctx.destination);
+			sourceNode.start();
+			} else {
+				alert("No audio to play. Either select a file or use a mic to record above.");
+			}
+		}
 
-            const sourceNode = ctx.createBufferSource();
-            sourceNode.buffer = buffer;
-            sourceNode.connect(ctx.destination);
-            sourceNode.start();
+		fileSelect.addEventListener('change', function(e) {
+			const file = e.target.files[0];
+			sampleRate = 44100;
+			const context = new OfflineAudioContext(2, 1, sampleRate);
 
-            $('#save').onclick = function() {
-                const wav = bufferToWav(buffer);
-                const blob = new window.Blob([ new DataView(wav) ], {
-                    type: 'audio/wav'
-                });
+			const reader = new FileReader();
+			reader.onload = function(e) {
+				context.decodeAudioData(e.target.result, function(retBuffer) {
+					buffer = retBuffer;
+				}, function(err) {
+					console.log(err);
+				});
+			};
+			reader.readAsArrayBuffer(file);
+		});
 
-                const url = window.URL.createObjectURL(blob);
-                const anchor = document.createElement('a');
-                anchor.href = url;
-                anchor.download = 'audio.wav';
-                anchor.click();
-                window.URL.revokeObjectURL(url);
-            };
-        }
+		$('#selectEffect').addEventListener('change', function(e) {
+			var effectValue = $('#selectEffect').value;
+			document.querySelectorAll('.effectContainer').forEach((element) => {
+				element.style.display = 'none';
+			});
+			if (effectValue === 'chunkSort') {
+				$('#chunkSortContainer').style.display = "block";
+				pcmFunction = audioSortChangePCM;
+			} else if (effectValue === 'chopper') {
+				$('#chopperContainer').style.display = "block";
+				pcmFunction = chopperChangePCM;
+			} else {
 
-        let play = function() {
-            alert('Choose a file first!');
-        };
+			}
+		});
 
-        fileSelect.addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            sampleRate = 44100;
-            const context = new OfflineAudioContext(2, 1, sampleRate);
+		$('#processButton').addEventListener('click', function() {
+			let leftChannelData = buffer.getChannelData(0);
+			let rightChannelData;
+			try {
+				rightChannelData = buffer.getChannelData(1);
+			} catch(e) {}
+			pcmFunction(leftChannelData);
+			if (rightChannelData) {
+				pcmFunction(rightChannelData);
+			}
+			playBuffer();
+		});
 
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                play = function() {
-                    context.decodeAudioData(e.target.result, processBuffer, function(err) {
-                        console.log(err);
-                    });
-                };
-                play();
-            };
-            reader.readAsArrayBuffer(file);
-        });
+		$('#playButton').addEventListener('click', function() {
+			playBuffer();
+		});
 
-        $('#play').addEventListener('click', function() {
-            play();
-        });
+		$('#saveButton').onclick = function() {
+			const wav = bufferToWav(buffer);
+			const blob = new window.Blob([ new DataView(wav) ], {
+				type: 'audio/wav'
+			});
 
-        let recordingState = 'stopped';
-        let currentStream;
-        let rec;
-        const recordBtn = $('#rec');
-        recordBtn.addEventListener('click', function() {
-            if (recordingState === 'recording') {
-                recordingState = 'stopped';
-                currentStream.getTracks()[0].stop();
-                recordBtn.textContent = 'Record from your microphone';
-                rec.stop();
-                rec.getBuffer(function(buffers) {
-                    play = function() {
-                        sampleRate = ctx.sampleRate;
-                        var newBuffer = ctx.createBuffer(buffers.length, buffers[0].length, ctx.sampleRate);
-                        for (let x = 0; x < buffers.length; x++) {
-                            newBuffer.getChannelData(x).set(buffers[x]);
-                        }
-                        processBuffer(newBuffer);
-                    };
-                    play();
-                });
-            } else if (recordingState === 'stopped') {
-                recordingState = 'prepairing';
-                navigator.mediaDevices.getUserMedia({audio: true}).then(function(stream) {
-                    currentStream = stream;
-                    recordingState = 'recording';
-                    recordBtn.textContent = 'Stop recording';
-                    const source = ctx.createMediaStreamSource(stream);
-                    rec = new Recorder(source);
-                    rec.record();
-                }).catch(function(e) {
-                    console.log('Error recording!', e);
-                    recordingState = 'stopped';
-                });
-            }
-        });
-    </script>
+			const url = window.URL.createObjectURL(blob);
+			const anchor = document.createElement('a');
+			anchor.href = url;
+			anchor.download = 'audio.wav';
+			anchor.click();
+			window.URL.revokeObjectURL(url);
+		};
+
+		let recordingState = 'stopped';
+		let currentStream;
+		let rec;
+		const recordBtn = $('#rec');
+		recordBtn.addEventListener('click', function() {
+			if (recordingState === 'recording') {
+				recordingState = 'stopped';
+				currentStream.getTracks()[0].stop();
+				recordBtn.textContent = 'Record from your microphone';
+				rec.stop();
+				rec.getBuffer(function(buffers) {
+					sampleRate = ctx.sampleRate;
+					var newBuffer = ctx.createBuffer(buffers.length, buffers[0].length, ctx.sampleRate);
+					for (let x = 0; x < buffers.length; x++) {
+						newBuffer.getChannelData(x).set(buffers[x]);
+					}
+					buffer = newBuffer;
+				});
+			} else if (recordingState === 'stopped') {
+				recordingState = 'prepairing';
+				navigator.mediaDevices.getUserMedia({audio: true}).then(function(stream) {
+					currentStream = stream;
+					recordingState = 'recording';
+					recordBtn.textContent = 'Stop recording';
+					const source = ctx.createMediaStreamSource(stream);
+					rec = new Recorder(source);
+					rec.record();
+				}).catch(function(e) {
+					console.log('Error recording!', e);
+					recordingState = 'stopped';
+				});
+			}
+		});
+	</script>
 </body></html>
