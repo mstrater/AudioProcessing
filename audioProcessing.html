@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 	<meta name="viewport" content="width=device-width">
-	<title>Sort Audio By Loudness</title>
+	<title>Audio Processing</title>
+	<link rel="stylesheet" type="text/css" href="styles.css">
 </head>
 <body>
 	1. Choose a file:<br>
@@ -13,24 +14,33 @@
 		<option value="chopper">Chopper</option>
 	</select><br>
 	3. Configure the effect:<br>
-	<div id="chunkSortContainer" class="effectContainer" style='display: none'>
-		This will split audio into 'chunks' and sort them by loudness.<br>
-		First set a chunk size:<br>
-		Chunk size (in seconds): <input id="chunk" value="0.05"><br>
-		Crossfade length (Needs to be less than Chunk size [less than 1/2 of chunk size for overlap]): <input id="cross" value="0.008333333333333333333333333333"><br>
-		Sort loudest to quietest?: <input id="sortOrder" type="checkbox" checked><br>
-		Mode:
-		<select id="algorithmMode">
-			<option value="xfadeOverlap" selected="selected">Crossfade (favor volume order)</option>
-			<option value="xfadeNoOverlap">Crossfade (favor original sample length)</option>
-			<option value="noXfade">No crossfade (sounds clicky)</option>
-		</select>
+	<div class="effectsContainer">
+		<div id="chunkSortContainer" class="effect">
+			This will split audio into 'chunks' and sort them by loudness.<br>
+			First set a chunk size:<br>
+			Chunk size (in seconds): <input id="chunk" value="0.05"><br>
+			Crossfade length (Needs to be less than Chunk size [less than 1/2 of chunk size for overlap]): <input id="cross" value="0.008333333333333333333333333333"><br>
+			Sort loudest to quietest?: <input id="sortOrder" type="checkbox" checked><br>
+			Mode:
+			<select id="algorithmMode">
+				<option value="xfadeOverlap" selected="selected">Crossfade (favor volume order)</option>
+				<option value="xfadeNoOverlap">Crossfade (favor original sample length)</option>
+				<option value="noXfade">No crossfade (sounds clicky)</option>
+			</select><br>
+			<button>Process</button>
+		</div>
+		<div id="chopperContainer" class="effect">
+			This will mute the audio during each second chunk to create a choppy effect.
+			First chunk length: <input id="firstChunk" value="0.025"><br>
+			Second chunk length: <input id="secondChunk" value="0.01666666666666666666666666667"><br>
+			<button>Process</button>
+		</div>
+		<div id="fractalizeContainer" class="effect">
+			Overlay copies of source audio played at different speeds<br>
+			<button>Process</button>
+		</div>
 	</div>
-	<div id="chopperContainer" class="effectContainer" style='display: none'>
-		This will mute the audio during each second chunk to create a choppy effect.
-		First chunk length: <input id="firstChunk" value="0.025"><br>
-		Second chunk length: <input id="secondChunk" value="0.01666666666666666666666666667"><br>
-	</div>
+
 	4. Process the audio:<button id="processButton">Process</button><br>
 	5. Listen again:<button id="playButton">Play Again</button><br>
 	6. Save the audio to your computer:<button id="saveButton">Save</button>
@@ -51,7 +61,6 @@
 
 		const ctx = new AudioContext();
 		let sampleRate = 44100;
-		let pcmFunction;
 		let buffer;
 
 		//the root square of the average of the square of each value
@@ -69,6 +78,34 @@
 			return rms;
 		}
 
+		connectButtonToPCMFunction($('#fractalizeContainer button'), fractalizeChangePCM);
+		function fractalizeChangePCM(data) {
+			const finalLength = data.length;
+			const iterations = 10;
+			const dataArray = [];
+			dataArray.push(data.slice());
+			let currentData = data;
+			for (let i=0; i<iterations; i++) {
+				const spedUp = new Float32Array(Math.floor(currentData.length/2));
+				for (let j=0; j<spedUp.length; j++) {
+					spedUp[j] = 0.35 * (currentData[2 * j] + currentData[2 * j + 1]);
+				}
+				dataArray.push(spedUp);
+				currentData = spedUp;
+			}
+			const newBuffer = new Float32Array(finalLength);
+			for (let i=0; i<finalLength; i++) {
+				let total = 0;
+				for (let j=0; j<iterations+1; j++) {
+					let currentData = dataArray[j];
+					total += currentData[i%currentData.length] / (Math.pow(2, j + 1));
+				}
+				newBuffer[i] = total;
+			}
+			data.set(newBuffer);
+		}
+
+		connectButtonToPCMFunction($('#chopperContainer button'), chopperChangePCM);
 		function chopperChangePCM(data) {
 			const newBuffer = new Float32Array(data.length);
 			let firstChunkLength = parseFloat($('#firstChunk').value);
@@ -86,6 +123,7 @@
 			data.set(newBuffer);
 		}
 
+		connectButtonToPCMFunction($('#chunkSortContainer button'), audioSortChangePCM);
 		function audioSortChangePCM(data) {
 			// just reverse it
 			//data.reverse();
@@ -227,34 +265,20 @@
 			reader.readAsArrayBuffer(file);
 		});
 
-		$('#selectEffect').addEventListener('change', function(e) {
-			var effectValue = $('#selectEffect').value;
-			document.querySelectorAll('.effectContainer').forEach((element) => {
-				element.style.display = 'none';
+		function connectButtonToPCMFunction(button, changePCMFunction) {
+			button.addEventListener('click', function() {
+				let leftChannelData = buffer.getChannelData(0);
+				let rightChannelData;
+				try {
+					rightChannelData = buffer.getChannelData(1);
+				} catch(e) {}
+				changePCMFunction(leftChannelData);
+				if (rightChannelData) {
+					changePCMFunction(rightChannelData);
+				}
+				playBuffer();
 			});
-			if (effectValue === 'chunkSort') {
-				$('#chunkSortContainer').style.display = "block";
-				pcmFunction = audioSortChangePCM;
-			} else if (effectValue === 'chopper') {
-				$('#chopperContainer').style.display = "block";
-				pcmFunction = chopperChangePCM;
-			} else {
-
-			}
-		});
-
-		$('#processButton').addEventListener('click', function() {
-			let leftChannelData = buffer.getChannelData(0);
-			let rightChannelData;
-			try {
-				rightChannelData = buffer.getChannelData(1);
-			} catch(e) {}
-			pcmFunction(leftChannelData);
-			if (rightChannelData) {
-				pcmFunction(rightChannelData);
-			}
-			playBuffer();
-		});
+		}
 
 		$('#playButton').addEventListener('click', function() {
 			playBuffer();
