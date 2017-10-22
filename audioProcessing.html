@@ -33,6 +33,7 @@
 			This will mute the audio during each second chunk to create a choppy effect.
 			First chunk length: <input id="firstChunk" value="0.025"><br>
 			Second chunk length: <input id="secondChunk" value="0.01666666666666666666666666667"><br>
+			Elongate instead of mute: <input id="elongate" type="checkbox" checked><br>
 			<button>Process</button>
 		</div>
 		<div id="fractalizeContainer" class="effect">
@@ -102,25 +103,44 @@
 				}
 				newBuffer[i] = total;
 			}
-			data.set(newBuffer);
+			return newBuffer;
 		}
 
 		connectButtonToPCMFunction($('#chopperContainer button'), chopperChangePCM);
 		function chopperChangePCM(data) {
-			const newBuffer = new Float32Array(data.length);
+			let crossfadeLength = parseFloat($('#cross').value);
+			if (isNaN(crossfadeLength) || crossfadeLength <= 0) {
+				alert('invalid crossfade size, setting to 0.02');
+				crossfadeLength = 0.02;
+			}
+			let crossfadeSamples = Math.floor(crossfadeLength * sampleRate);
 			let firstChunkLength = parseFloat($('#firstChunk').value);
 			let secondChunkLength = parseFloat($('#secondChunk').value);
+			let elongate = document.querySelector('#elongate').value;
 			let chopCycleLength = firstChunkLength + secondChunkLength;
-			for (let i=0; i<data.length; i++) {
-				let timeInSeconds = i/sampleRate;
-				let timeIntoCycle = timeInSeconds - chopCycleLength * Math.floor(timeInSeconds/chopCycleLength);
-				if (timeIntoCycle < firstChunkLength) {
-					newBuffer[i] = data[i];
+			const newBuffer = elongate ? new Float32Array(chopCycleLength/firstChunkLength * data.length) : new Float32Array(data.length);
+			// i indexes data, j indexes newBuffer
+			let i=0;
+			for (let j=0; j<newBuffer.length; j++) {
+				let timeInSeconds = j/sampleRate;
+				let completedCycles = Math.floor(timeInSeconds/chopCycleLength);
+				let secsIntoCycle = timeInSeconds - chopCycleLength * completedCycles;
+				if (secsIntoCycle < firstChunkLength) {
+					newBuffer[j] = data[i];
 				} else {
-					newBuffer[i] = 0;
+					if (elongate) {
+						while (secsIntoCycle < chopCycleLength) {
+							j++;
+							secsIntoCycle = j/sampleRate - chopCycleLength * completedCycles;
+						}
+						j--; //decrement once since it will increment at the loop
+					} else {
+						//continue;
+					}
 				}
+				i++;
 			}
-			data.set(newBuffer);
+			return newBuffer;
 		}
 
 		connectButtonToPCMFunction($('#chunkSortContainer button'), audioSortChangePCM);
@@ -235,7 +255,7 @@
 					}
 				}
 			}
-			data.set(newBuffer);
+			return newBuffer;
 		}
 
 		function playBuffer() {
@@ -272,10 +292,16 @@
 				try {
 					rightChannelData = buffer.getChannelData(1);
 				} catch(e) {}
-				changePCMFunction(leftChannelData);
+				leftChannelData = changePCMFunction(leftChannelData);
 				if (rightChannelData) {
-					changePCMFunction(rightChannelData);
+					rightChannelData = changePCMFunction(rightChannelData);
 				}
+				var newBuffer = ctx.createBuffer(rightChannelData ? 2 : 1, Math.max(leftChannelData.length, rightChannelData.length), 44100);
+				newBuffer.getChannelData(0).set(leftChannelData);
+				try {
+					newBuffer.getChannelData(1).set(rightChannelData);
+				} catch(e) {}
+				buffer = newBuffer;
 				playBuffer();
 			});
 		}
@@ -317,7 +343,7 @@
 					buffer = newBuffer;
 				});
 			} else if (recordingState === 'stopped') {
-				recordingState = 'prepairing';
+				recordingState = 'preparing';
 				navigator.mediaDevices.getUserMedia({audio: true}).then(function(stream) {
 					currentStream = stream;
 					recordingState = 'recording';
