@@ -41,6 +41,10 @@
 			Overlay copies of source audio played at different speeds<br>
 			<button>Process</button>
 		</div>
+		<div id="ringModContainer" class="effect">
+			Multiply left channel and right channel together to get the sum and difference of their frequencies. Requires a stereo input.<br>
+			<button>Process</button>
+		</div>
 	</div>
 
 	4. Process the audio:<button id="processButton">Process</button><br>
@@ -80,7 +84,20 @@
 			return rms;
 		}
 
-		connectButtonToPCMFunction($('#fractalizeContainer button'), fractalizeChangePCM);
+		// Utility function to convert a mono function to support stereo processing
+		function stereoize(monoFunc) {
+			let stereoFunc = function (leftData, rightData) {
+				let result = {};
+				result.left = monoFunc(leftData);
+				if (rightData) {
+					result.right = monoFunc(rightData);
+				}
+				return result;
+			};
+			return stereoFunc;
+		}
+
+		connectButtonToPCMFunction($('#fractalizeContainer button'), stereoize(fractalizeChangePCM));
 		function fractalizeChangePCM(data) {
 			const finalLength = data.length;
 			const iterations = 10;
@@ -107,7 +124,7 @@
 			return newBuffer;
 		}
 
-		connectButtonToPCMFunction($('#chopperContainer button'), chopperChangePCM);
+		connectButtonToPCMFunction($('#chopperContainer button'), stereoize(chopperChangePCM));
 		function chopperChangePCM(data) {
 			let firstChunkLength = parseFloat($('#firstChunk').value);
 			let secondChunkLength = parseFloat($('#secondChunk').value);
@@ -143,7 +160,7 @@
 			return newBuffer;
 		}
 
-		connectButtonToPCMFunction($('#chunkSortContainer button'), audioSortChangePCM);
+		connectButtonToPCMFunction($('#chunkSortContainer button'), stereoize(audioSortChangePCM));
 		function audioSortChangePCM(data) {
 			// just reverse it
 			//data.reverse();
@@ -292,14 +309,11 @@
 				try {
 					rightChannelData = buffer.getChannelData(1);
 				} catch(e) {}
-				leftChannelData = changePCMFunction(leftChannelData);
-				if (rightChannelData) {
-					rightChannelData = changePCMFunction(rightChannelData);
-				}
-				var newBuffer = ctx.createBuffer(rightChannelData ? 2 : 1, Math.max(leftChannelData.length, rightChannelData.length), 44100);
-				newBuffer.getChannelData(0).set(leftChannelData);
+				let result = changePCMFunction(leftChannelData, rightChannelData);
+				var newBuffer = ctx.createBuffer(result.right ? 2 : 1, Math.max(result.left.length, result.right.length), 44100);
+				newBuffer.getChannelData(0).set(result.left);
 				try {
-					newBuffer.getChannelData(1).set(rightChannelData);
+					newBuffer.getChannelData(1).set(result.right);
 				} catch(e) {}
 				buffer = newBuffer;
 				playBuffer();
