@@ -33,6 +33,7 @@
 			This will mute the audio during each second chunk to create a choppy effect.
 			First chunk length: <input id="firstChunk" value="0.025"><br>
 			Second chunk length: <input id="secondChunk" value="0.01666666666666666666666666667"><br>
+			Fade length: <input id="chopperFade" value="0.0001"><br>
 			Elongate instead of mute: <input id="elongate" type="checkbox" checked><br>
 			<button>Process</button>
 		</div>
@@ -108,16 +109,11 @@
 
 		connectButtonToPCMFunction($('#chopperContainer button'), chopperChangePCM);
 		function chopperChangePCM(data) {
-			let crossfadeLength = parseFloat($('#cross').value);
-			if (isNaN(crossfadeLength) || crossfadeLength <= 0) {
-				alert('invalid crossfade size, setting to 0.02');
-				crossfadeLength = 0.02;
-			}
-			let crossfadeSamples = Math.floor(crossfadeLength * sampleRate);
 			let firstChunkLength = parseFloat($('#firstChunk').value);
 			let secondChunkLength = parseFloat($('#secondChunk').value);
 			let elongate = document.querySelector('#elongate').value;
 			let chopCycleLength = firstChunkLength + secondChunkLength;
+			let crossfadeLength = parseFloat($('#chopperFade').value);
 			const newBuffer = elongate ? new Float32Array(chopCycleLength/firstChunkLength * data.length) : new Float32Array(data.length);
 			// i indexes data, j indexes newBuffer
 			let i=0;
@@ -126,7 +122,13 @@
 				let completedCycles = Math.floor(timeInSeconds/chopCycleLength);
 				let secsIntoCycle = timeInSeconds - chopCycleLength * completedCycles;
 				if (secsIntoCycle < firstChunkLength) {
-					newBuffer[j] = data[i];
+					let fadeScalar = 1;
+					if (secsIntoCycle < crossfadeLength) {
+						fadeScalar = secsIntoCycle/crossfadeLength;
+					} else if (secsIntoCycle > firstChunkLength - crossfadeLength) {
+						fadeScalar = (firstChunkLength - secsIntoCycle)/crossfadeLength;
+					}
+					newBuffer[j] = fadeScalar * data[i];
 				} else {
 					if (elongate) {
 						while (secsIntoCycle < chopCycleLength) {
@@ -134,8 +136,6 @@
 							secsIntoCycle = j/sampleRate - chopCycleLength * completedCycles;
 						}
 						j--; //decrement once since it will increment at the loop
-					} else {
-						//continue;
 					}
 				}
 				i++;
