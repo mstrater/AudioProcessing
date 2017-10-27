@@ -97,6 +97,23 @@
 			return stereoFunc;
 		}
 
+		connectButtonToPCMFunction($('#ringModContainer button'), ringModChangePCM);
+		function ringModChangePCM(leftData, rightData) {
+			let longerChannel;
+			let shorterChannel;
+			if (leftData.length > rightData.length) {
+				longerChannel = leftData;
+				shorterChannel = rightData;
+			} else {
+				longerChannel = rightData;
+				shorterChannel= leftData;
+			}
+			for (let i=0; i<shorterChannel.length; i++) {
+				shorterChannel[i] = shorterChannel[i] * longerChannel[i];
+			}
+			return { left: shorterChannel };
+		}
+
 		connectButtonToPCMFunction($('#fractalizeContainer button'), stereoize(fractalizeChangePCM));
 		function fractalizeChangePCM(data) {
 			const finalLength = data.length;
@@ -310,7 +327,13 @@
 					rightChannelData = buffer.getChannelData(1);
 				} catch(e) {}
 				let result = changePCMFunction(leftChannelData, rightChannelData);
-				var newBuffer = ctx.createBuffer(result.right ? 2 : 1, Math.max(result.left.length, result.right.length), 44100);
+				let stereo = Boolean(result.right); // should it be result.right.length instead so an empty array leads to mono?
+				let newBuffer;
+				if (stereo) {
+					newBuffer = ctx.createBuffer(2, Math.max(result.left.length, result.right.length), 44100);
+				} else {
+					newBuffer = ctx.createBuffer(1, result.left.length, 44100);
+				}
 				newBuffer.getChannelData(0).set(result.left);
 				try {
 					newBuffer.getChannelData(1).set(result.right);
